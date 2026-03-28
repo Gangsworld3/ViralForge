@@ -1,0 +1,63 @@
+{
+  "project_name": "ViralForge AI",
+  "data_dir": "data",
+  "output_dir": "output",
+  "memory_dir": "memory",
+  "log_dir": "logs",
+  "enable_browser_automation": true,
+  "posting_auto_publish": false,
+  "posting_self_mode": "api",
+  "auto_patch_errors": true,
+  "smoke_test": false,
+  "youtube_access_token": "",
+  "youtube_refresh_token": "",
+  "youtube_client_id": "",
+  "youtube_client_secret": "",
+  "youtube_privacy_status": "unlisted",
+  "openrouter_api_key": "",
+  "openrouter_api_key_2": "",
+  "meta_app_id": "",
+  "meta_app_secret": "",
+  "meta_page_id": "",
+  "meta_instagram_account_id": "",
+  "instagram_media_url_base": "",
+  "media_host_base_url": "",
+  "media_host_host": "127.0.0.1",
+  "media_host_port": 8088,
+  "meta_graph_version": "v20.0",
+  "x_api_key": "",
+  "x_api_secret": "",
+  "x_access_token": "",
+  "x_access_token_secret": "",
+  "tiktok_open_id": "",
+  "providers": {
+    "gemini_model": "gemini-2.5-flash",
+    "openrouter_model": "openrouter/free"
+  },
+  "video": {
+    "width": 720,
+    "height": 1280,
+    "fps": 30,
+    "quality_mode": "hq_720p_60s",
+    "target_duration_seconds": 60,
+    "target_width": 720,
+    "target_height": 1280,
+    "scene_backend": "free",
+    "scene_style": "free",
+    "scene_seed": 0,
+    "voice": "en-US-AriaNeural",
+    "music_volume": 0.12,
+    "speech_wpm": 165
+  },
+  "research": {
+    "rss_sources": [
+      "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US",
+      "https://www.reddit.com/r/popular/.rss"
+    ],
+    "max_trends": 10
+  },
+  "posting": {
+    "default_platforms": ["youtube", "x", "meta", "tiktok"],
+    "dry_run": true
+  }
+}

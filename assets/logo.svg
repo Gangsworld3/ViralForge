@@ -1,0 +1,53 @@
+<svg width="1400" height="360" viewBox="0 0 1400 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gold" x1="108" y1="88" x2="286" y2="258" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F3E2B0"/>
+      <stop offset="0.35" stop-color="#D4B16A"/>
+      <stop offset="0.72" stop-color="#B58438"/>
+      <stop offset="1" stop-color="#8B6224"/>
+    </linearGradient>
+    <linearGradient id="goldSoft" x1="128" y1="110" x2="262" y2="234" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF7DF"/>
+      <stop offset="1" stop-color="#C6943E"/>
+    </linearGradient>
+    <filter id="softShadow" x="70" y="60" width="256" height="256" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#A97D34" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect x="30" y="30" width="1340" height="300" rx="34" fill="#FCFBF8"/>
+  <rect x="30.75" y="30.75" width="1338.5" height="298.5" rx="33.25" stroke="#DDD6C8" stroke-width="1.5"/>
+
+  <g opacity="0.9">
+    <path d="M1014 74H1286" stroke="#B7924E" stroke-width="1.2"/>
+    <path d="M1014 286H1286" stroke="#B7924E" stroke-width="1.2"/>
+    <path d="M352 286H930" stroke="#D9D2C6" stroke-width="1"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="88" y="78" width="212" height="212" rx="32" fill="#FFFFFF"/>
+    <rect x="88.9" y="78.9" width="210.2" height="210.2" rx="31.1" stroke="#D5C2A0" stroke-width="1.8"/>
+
+    <path d="M142 242L194 98L219 149H254L197 270L142 242Z" fill="url(#gold)"/>
+    <path d="M156 232L193 129L209 161H234L194 248L156 232Z" fill="#FFFFFF" opacity="0.2"/>
+
+    <path d="M126 114H206" stroke="url(#goldSoft)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M126 132H184" stroke="url(#goldSoft)" stroke-width="2.8" stroke-linecap="round" opacity="0.88"/>
+    <path d="M126 150H172" stroke="url(#goldSoft)" stroke-width="1.9" stroke-linecap="round" opacity="0.7"/>
+
+    <circle cx="238" cy="116" r="12" fill="#E1C183"/>
+    <circle cx="238" cy="116" r="5.5" fill="#FFF7E6"/>
+
+    <path d="M230 174L246 190L230 206" stroke="#D3AD65" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M246 174L262 190L246 206" stroke="#9A6F2A" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g>
+    <text x="352" y="146" fill="#1A1A1A" font-family="Georgia, 'Times New Roman', serif" font-size="80" font-weight="700" letter-spacing="1.2">ViralForge AI</text>
+    <text x="356" y="188" fill="#9B7A3A" font-family="'Segoe UI', Arial, sans-serif" font-size="21" font-weight="600" letter-spacing="7.5">AUTONOMOUS CONTENT INTELLIGENCE</text>
+    <text x="356" y="246" fill="#5F6470" font-family="'Segoe UI', Arial, sans-serif" font-size="24" font-weight="400">
+      Research. Script. Render. Publish. Learn.
+    </text>
+    <rect x="354" y="268" width="154" height="2" fill="#B7924E"/>
+  </g>
+</svg>
