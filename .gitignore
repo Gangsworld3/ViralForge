@@ -11,6 +11,7 @@ venv/
 data/
 logs/
 output/
+dist/
 memory/*.json
 memory/*.jsonl
 memory/chroma/

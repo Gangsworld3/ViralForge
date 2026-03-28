@@ -91,21 +91,21 @@ python -m viralforge self-post-packages
 
 ```text
 viralforge/
-├── agents/         # pipeline stages
-├── analytics/      # scoring and analytics
-├── application/    # runtime bootstrap and orchestration
-├── interfaces/     # CLI and web entrypoints
-├── llm_router/     # provider routing
-├── memory/         # long-term memory
-├── monetization/   # affiliate / sponsorship logic
-├── posting/        # posting workflows and adapters
-├── research/       # trend collection
-├── self_healing/   # failure handling
-├── subtitles/      # subtitle timing/rendering
-├── utils/          # shared helpers
-├── video_engine/   # planning and rendering
-├── tests/          # regression tests
-└── assets/         # static assets
+|- agents/         # pipeline stages
+|- analytics/      # scoring and analytics
+|- application/    # runtime bootstrap and orchestration
+|- interfaces/     # CLI and web entrypoints
+|- llm_router/     # provider routing
+|- memory/         # long-term memory
+|- monetization/   # affiliate / sponsorship logic
+|- posting/        # posting workflows and adapters
+|- research/       # trend collection
+|- self_healing/   # failure handling
+|- subtitles/      # subtitle timing/rendering
+|- utils/          # shared helpers
+|- video_engine/   # planning and rendering
+|- tests/          # regression tests
+`- assets/         # static assets
 ```
 
 ## Configuration
@@ -222,4 +222,4 @@ python -m viralforge state-db --vacuum
 
 ## License
 
-Suggested license: MIT
+MIT
