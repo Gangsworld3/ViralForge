@@ -203,6 +203,118 @@ class VideoBrain:
                 self.logger.debug("Video brain refinement fell back to heuristic plan: %s", exc)
             return {}
 
+    def _apply_numeric_refinement(self, plan: VideoPlan, key: str, value: Any) -> None:
+        bounds = {
+            "scene_count": (3, 7),
+            "story_beat_count": (3, 7),
+        }
+        low, high = bounds[key]
+        try:
+            setattr(plan, key, _clamp(int(value), low, high))
+        except Exception:
+            return
+
+    def _apply_list_refinement(self, plan: VideoPlan, key: str, value: Any) -> None:
+        if key == "emphasis_words" and isinstance(value, list):
+            plan.emphasis_words = [str(item)[:24] for item in value[:8]]
+            return
+        if key == "notes":
+            if isinstance(value, list):
+                plan.notes = [str(item)[:120] for item in value[:5]]
+            elif value:
+                plan.notes = [str(value)[:120]]
+            return
+        if key == "color_palette" and isinstance(value, list):
+            palette: list[list[int]] = []
+            for color in value[:4]:
+                if isinstance(color, (list, tuple)) and len(color) >= 3:
+                    palette.append([int(color[0]), int(color[1]), int(color[2])])
+            plan.color_palette = palette
+
+    def _apply_text_refinement(self, plan: VideoPlan, key: str, value: Any) -> None:
+        if key == "theme":
+            plan.theme = _normalize_enum(value, _ALLOWED_THEMES, plan.theme)
+        elif key == "pacing":
+            plan.pacing = _normalize_enum(value, _ALLOWED_PACING, plan.pacing)
+        elif key == "subtitle_preset":
+            plan.subtitle_preset = _normalize_enum(value, _ALLOWED_PRESETS, plan.subtitle_preset)
+        elif key == "motion":
+            plan.motion = _normalize_enum(value, _ALLOWED_MOTION, plan.motion)
+        elif key in {"music_intensity", "voice_energy", "intro_style", "render_mode", "card_density", "scene_backend"}:
+            setattr(plan, key, str(value).strip().lower())
+        else:
+            setattr(plan, key, str(value))
+
+    def _merge_refinement(self, plan: VideoPlan, refined: dict[str, Any]) -> VideoPlan:
+        allowed = {
+            "theme",
+            "pacing",
+            "subtitle_preset",
+            "scene_count",
+            "motion",
+            "music_intensity",
+            "voice_energy",
+            "footer_text",
+            "intro_style",
+            "render_mode",
+            "hook_text",
+            "emphasis_words",
+            "card_density",
+            "story_beat_count",
+            "notes",
+            "color_palette",
+            "scene_backend",
+        }
+        numeric_fields = {"scene_count", "story_beat_count"}
+        list_fields = {"emphasis_words", "notes", "color_palette"}
+        for key in allowed:
+            if key not in refined:
+                continue
+            value = refined[key]
+            if key in numeric_fields:
+                self._apply_numeric_refinement(plan, key, value)
+            elif key in list_fields:
+                self._apply_list_refinement(plan, key, value)
+            else:
+                self._apply_text_refinement(plan, key, value)
+        return plan
+
+    def _default_palette(self, theme: str) -> list[list[int]]:
+        if theme == "neon":
+            return [[25, 34, 64], [49, 89, 182], [96, 165, 250]]
+        if theme == "playful":
+            return [[22, 29, 50], [236, 72, 153], [74, 222, 128]]
+        return [[24, 20, 18], [93, 63, 211], [251, 146, 60]]
+
+    def _finalize_plan(
+        self,
+        plan: VideoPlan,
+        research_text: str,
+        analytics_hint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(plan.notes, list):
+            plan.notes = [] if not plan.notes else [str(plan.notes)[:120]]
+        if not isinstance(plan.emphasis_words, list):
+            plan.emphasis_words = []
+        if not plan.color_palette:
+            defaults = _theme_defaults(plan.theme)
+            plan.color_palette = self._default_palette(plan.theme)
+            plan.footer_text = plan.footer_text or defaults["footer_text"]
+        plan.notes.append(f"Research context length: {len(research_text.split()) if research_text else 0} words.")
+        if analytics_hint:
+            plan.notes.append("Analytics hint applied from prior runs.")
+        return plan.as_dict()
+
+    def _save_plan_memory(self, topic: str, plan: VideoPlan) -> None:
+        if not self.memory:
+            return
+        payload = plan.as_dict()
+        self.memory.save_memory(
+            "video_brain_plan",
+            json.dumps(payload, ensure_ascii=False),
+            {"topic": topic, "theme": plan.theme, "subtitle_preset": plan.subtitle_preset},
+        )
+
     def plan_video(
         self,
         topic: str,
@@ -214,93 +326,10 @@ class VideoBrain:
         plan = self._base_plan(topic, script, trend_items)
         refined = self._llm_refine(plan, topic, script, trend_items)
         if refined:
-            allowed = {
-                "theme",
-                "pacing",
-                "subtitle_preset",
-                "scene_count",
-                "motion",
-                "music_intensity",
-                "voice_energy",
-                "footer_text",
-                "intro_style",
-                "render_mode",
-                "hook_text",
-                "emphasis_words",
-                "card_density",
-                "story_beat_count",
-                "notes",
-                "color_palette",
-                "scene_backend",
-            }
-            for key in allowed:
-                if key not in refined:
-                    continue
-                value = refined[key]
-                if key == "scene_count":
-                    try:
-                        plan.scene_count = _clamp(int(value), 3, 7)
-                    except Exception:
-                        continue
-                elif key == "story_beat_count":
-                    try:
-                        plan.story_beat_count = _clamp(int(value), 3, 7)
-                    except Exception:
-                        continue
-                elif key == "emphasis_words" and isinstance(value, list):
-                    plan.emphasis_words = [str(item)[:24] for item in value[:8]]
-                elif key == "notes":
-                    if isinstance(value, list):
-                        plan.notes = [str(item)[:120] for item in value[:5]]
-                    elif value:
-                        plan.notes = [str(value)[:120]]
-                elif key == "color_palette" and isinstance(value, list):
-                    palette: list[list[int]] = []
-                    for color in value[:4]:
-                        if isinstance(color, (list, tuple)) and len(color) >= 3:
-                            palette.append([int(color[0]), int(color[1]), int(color[2])])
-                    plan.color_palette = palette
-                else:
-                    if key == "theme":
-                        plan.theme = _normalize_enum(value, _ALLOWED_THEMES, plan.theme)
-                    elif key == "pacing":
-                        plan.pacing = _normalize_enum(value, _ALLOWED_PACING, plan.pacing)
-                    elif key == "subtitle_preset":
-                        plan.subtitle_preset = _normalize_enum(value, _ALLOWED_PRESETS, plan.subtitle_preset)
-                    elif key == "motion":
-                        plan.motion = _normalize_enum(value, _ALLOWED_MOTION, plan.motion)
-                    elif key in {"music_intensity", "voice_energy", "intro_style", "render_mode", "card_density", "scene_backend"}:
-                        setattr(plan, key, str(value).strip().lower())
-                    else:
-                        setattr(plan, key, str(value))
-        if not isinstance(plan.notes, list):
-            plan.notes = [] if not plan.notes else [str(plan.notes)[:120]]
-        if not isinstance(plan.emphasis_words, list):
-            plan.emphasis_words = []
-        if not plan.color_palette:
-            defaults = _theme_defaults(plan.theme)
-            if plan.theme == "neon":
-                plan.color_palette = [[25, 34, 64], [49, 89, 182], [96, 165, 250]]
-            elif plan.theme == "playful":
-                plan.color_palette = [[22, 29, 50], [236, 72, 153], [74, 222, 128]]
-            else:
-                plan.color_palette = [[24, 20, 18], [93, 63, 211], [251, 146, 60]]
-            plan.footer_text = plan.footer_text or defaults["footer_text"]
-        plan.notes.extend(
-            [
-                f"Research context length: {len(research_text.split()) if research_text else 0} words.",
-            ]
-        )
-        if analytics_hint:
-            plan.notes.append("Analytics hint applied from prior runs.")
-        payload = plan.as_dict()
+            plan = self._merge_refinement(plan, refined)
+        payload = self._finalize_plan(plan, research_text, analytics_hint=analytics_hint)
         try:
-            if self.memory:
-                self.memory.save_memory(
-                    "video_brain_plan",
-                    json.dumps(payload, ensure_ascii=False),
-                    {"topic": topic, "theme": plan.theme, "subtitle_preset": plan.subtitle_preset},
-                )
+            self._save_plan_memory(topic, plan)
         except Exception as exc:
             if self.logger:
                 self.logger.warning("Failed to save video brain plan: %s", exc)

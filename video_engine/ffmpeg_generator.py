@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from subtitles.subtitles import SubtitleRenderer, build_word_timings, write_srt
-from utils.text import slugify, split_words
+from utils.text import slugify
 
 
 class FFmpegVideoGenerator:
@@ -271,6 +271,171 @@ class FFmpegVideoGenerator:
         draw.rounded_rectangle((margin, y, margin + fill_w, y + bar_h), radius=10, fill=(*accent, 220))
         return np.array(image.convert("RGB"))
 
+    def _target_duration(self, script: str) -> float:
+        words = split_words(script)
+        target_duration = max(12.0, float(getattr(self.config, "video_target_duration_seconds", 60)))
+        duration = max(target_duration, len(words) * (60.0 / max(1, self.config.video_speech_wpm)))
+        if self.config.smoke_test:
+            duration = min(duration, 4.0)
+        return duration
+
+    def _resolve_scenes(
+        self,
+        topic: str,
+        script: str,
+        size: tuple[int, int],
+        trend_items: list[dict[str, Any]],
+        plan: dict[str, Any],
+    ) -> tuple[list[Path], bool]:
+        first_line = script.splitlines()[0] if script.splitlines() else script[:60]
+        scene_count = int(plan.get("scene_count") or 4)
+        selected_trends = trend_items[:scene_count]
+        scenes = self.assets.generate_trend_story_images(first_line[:60], selected_trends, size, plan=plan)
+        use_motion_fallback = not scenes and str(plan.get("render_mode", "")).strip().lower() == "motion"
+        if not scenes and not use_motion_fallback:
+            scenes = self.assets.generate_story_images(first_line[:60], 4, size)
+        if not scenes and not use_motion_fallback:
+            scenes = self.assets.generate_story_images(topic, 4, size)
+        return scenes, use_motion_fallback
+
+    def _build_subtitles(self, script: str, duration: float, output_path: Path, plan: dict[str, Any], size: tuple[int, int]):
+        subtitle_entries = build_word_timings(script.replace("\n", " "), duration, speech_wpm=self.config.video_speech_wpm)
+        srt_path = output_path.with_suffix(".srt")
+        write_srt(subtitle_entries, srt_path)
+        renderer = SubtitleRenderer(
+            size,
+            style={
+                "preset": plan.get("subtitle_preset", "capcut_pop"),
+                "position": plan.get("subtitle_position", "bottom"),
+                "context_window": 5,
+                "motion_amp": {"low": 14, "medium": 22, "high": 30}.get(str(plan.get("motion", "")).strip().lower(), 22),
+            },
+        )
+        return subtitle_entries, srt_path, renderer
+
+    def _timeline_metrics(self, duration: float, scenes: list[Path]) -> tuple[int, float, float, float]:
+        frame_count = max(1, int(duration * self.config.video_fps))
+        intro_span = min(2.4, max(1.1, duration * 0.14))
+        remaining = max(0.01, duration - intro_span)
+        scene_span = remaining / max(1, len(scenes)) if scenes else remaining
+        return frame_count, intro_span, remaining, scene_span
+
+    def _frame_base(
+        self,
+        topic: str,
+        size: tuple[int, int],
+        t: float,
+        intro_span: float,
+        remaining: float,
+        scene_span: float,
+        scenes: list[Path],
+        use_motion_fallback: bool,
+        trend_items: list[dict[str, Any]],
+        plan: dict[str, Any],
+    ) -> np.ndarray:
+        if t < intro_span:
+            intro_progress = t / max(0.001, intro_span)
+            return self._intro_frame(topic, size, intro_progress, plan=plan)
+        t_scene = t - intro_span
+        if use_motion_fallback:
+            scene_index = min(max(0, len(trend_items) - 1), int((t_scene / remaining) * max(1, len(trend_items))))
+            trend_item = trend_items[scene_index] if trend_items else None
+            return self._motion_frame(topic, size, t_scene, remaining, trend_item=trend_item, plan=plan)
+        scene_index = min(len(scenes) - 1, int(t_scene / scene_span))
+        scene_t = t_scene - scene_index * scene_span
+        return self._render_scene_frame(scenes[scene_index], size, scene_t, scene_span, plan=plan)
+
+    def _render_frames(
+        self,
+        frame_dir: Path,
+        topic: str,
+        duration: float,
+        size: tuple[int, int],
+        scenes: list[Path],
+        use_motion_fallback: bool,
+        trend_items: list[dict[str, Any]],
+        plan: dict[str, Any],
+        renderer: SubtitleRenderer,
+        subtitle_entries: list[dict[str, Any]],
+    ) -> int:
+        frame_count, intro_span, remaining, scene_span = self._timeline_metrics(duration, scenes)
+        for index in range(frame_count):
+            t = index / float(self.config.video_fps)
+            base = self._frame_base(
+                topic=topic,
+                size=size,
+                t=t,
+                intro_span=intro_span,
+                remaining=remaining,
+                scene_span=scene_span,
+                scenes=scenes,
+                use_motion_fallback=use_motion_fallback,
+                trend_items=trend_items,
+                plan=plan,
+            )
+            base = self._compose_progress_bar(base, t / max(0.001, duration), plan=plan)
+            frame = renderer.render(base, t, subtitle_entries)
+            Image.fromarray(frame).save(frame_dir / f"frame_{index:06d}.png")
+        return frame_count
+
+    def _encode_temp_video(self, frame_pattern: str, temp_video: Path) -> None:
+        encode_cmd = [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            str(self.config.video_fps),
+            "-i",
+            frame_pattern,
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(temp_video),
+        ]
+        subprocess.run(encode_cmd, check=True, capture_output=True)
+
+    def _audio_mux_spec(self, temp_video: Path, output_path: Path, voice_path: Path | None, music_path: Path | None) -> list[str] | None:
+        voice_exists = bool(voice_path and voice_path.exists())
+        music_exists = bool(music_path and music_path.exists())
+        if not voice_exists and not music_exists:
+            return None
+        audio_inputs: list[str] = []
+        filter_parts: list[str] = []
+        maps: list[str] = []
+        if voice_exists:
+            audio_inputs.extend(["-i", str(voice_path)])
+        if music_exists:
+            audio_inputs.extend(["-stream_loop", "-1", "-i", str(music_path)])
+        if voice_exists and music_exists:
+            filter_parts = [
+                "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=1.0,aresample=44100[voice]",
+                "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.18,aresample=44100[music]",
+                "[music][voice]sidechaincompress=threshold=0.02:ratio=12:attack=20:release=250[ducked]",
+                "[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            ]
+            maps = ["-map", "0:v", "-map", "[aout]"]
+        elif voice_exists:
+            maps = ["-map", "0:v", "-map", "1:a"]
+        else:
+            maps = ["-map", "0:v", "-map", "1:a"]
+        mux_cmd = ["ffmpeg", "-y", "-i", str(temp_video), *audio_inputs]
+        if filter_parts:
+            mux_cmd.extend(["-filter_complex", ";".join(filter_parts)])
+        mux_cmd.extend([*maps, "-c:v", "copy", "-c:a", "aac", "-shortest", str(output_path)])
+        return mux_cmd
+
+    def _write_output(self, temp_video: Path, output_path: Path, voice_path: Path | None, music_path: Path | None) -> None:
+        mux_cmd = self._audio_mux_spec(temp_video, output_path, voice_path, music_path)
+        if mux_cmd:
+            subprocess.run(mux_cmd, check=True, capture_output=True)
+        else:
+            temp_video.replace(output_path)
+        if temp_video.exists():
+            try:
+                temp_video.unlink()
+            except Exception:
+                pass
+
     def build(
         self,
         topic: str,
@@ -283,131 +448,29 @@ class FFmpegVideoGenerator:
     ) -> dict[str, Any]:
         plan = self._plan(plan)
         size = (self.config.video_width, self.config.video_height)
-        words = split_words(script)
         trend_items = trend_items or []
-        target_duration = max(12.0, float(getattr(self.config, "video_target_duration_seconds", 60)))
-        duration = max(target_duration, len(words) * (60.0 / max(1, self.config.video_speech_wpm)))
-        if self.config.smoke_test:
-            duration = min(duration, 4.0)
-
-        first_line = script.splitlines()[0] if script.splitlines() else script[:60]
-        scene_count = int(plan.get("scene_count") or 4)
-        selected_trends = trend_items[:scene_count]
-        scenes = self.assets.generate_trend_story_images(first_line[:60], selected_trends, size, plan=plan)
-        use_motion_fallback = not scenes and str(plan.get("render_mode", "")).strip().lower() == "motion"
-        if not scenes and not use_motion_fallback:
-            scenes = self.assets.generate_story_images(first_line[:60], 4, size)
-        if not scenes and not use_motion_fallback:
-            scenes = self.assets.generate_story_images(topic, 4, size)
-
-        scene_duration = duration / max(1, len(scenes))
-        subtitle_entries = build_word_timings(script.replace("\n", " "), duration, speech_wpm=self.config.video_speech_wpm)
-        srt_path = output_path.with_suffix(".srt")
-        write_srt(subtitle_entries, srt_path)
-
-        renderer = SubtitleRenderer(
-            size,
-            style={
-                "preset": plan.get("subtitle_preset", "capcut_pop"),
-                "position": plan.get("subtitle_position", "bottom"),
-                "context_window": 5,
-                "motion_amp": {"low": 14, "medium": 22, "high": 30}.get(str(plan.get("motion", "")).strip().lower(), 22),
-            },
-        )
-        frame_count = max(1, int(duration * self.config.video_fps))
-        intro_span = min(2.4, max(1.1, duration * 0.14))
-        remaining = max(0.01, duration - intro_span)
-        scene_span = remaining / max(1, len(scenes)) if scenes else remaining
+        duration = self._target_duration(script)
+        scenes, use_motion_fallback = self._resolve_scenes(topic, script, size, trend_items, plan)
+        subtitle_entries, srt_path, renderer = self._build_subtitles(script, duration, output_path, plan, size)
 
         with tempfile.TemporaryDirectory(prefix="viralforge_frames_") as tmp:
             frame_dir = Path(tmp)
-            for index in range(frame_count):
-                t = index / float(self.config.video_fps)
-                if t < intro_span:
-                    intro_progress = t / max(0.001, intro_span)
-                    base = self._intro_frame(topic, size, intro_progress, plan=plan)
-                else:
-                    t_scene = t - intro_span
-                    if use_motion_fallback:
-                        scene_index = min(max(0, len(trend_items) - 1), int((t_scene / remaining) * max(1, len(trend_items))))
-                        trend_item = trend_items[scene_index] if trend_items else None
-                        scene_t = t_scene
-                        base = self._motion_frame(topic, size, scene_t, remaining, trend_item=trend_item, plan=plan)
-                    else:
-                        scene_index = min(len(scenes) - 1, int(t_scene / scene_span))
-                        scene_t = t_scene - scene_index * scene_span
-                        base = self._render_scene_frame(scenes[scene_index], size, scene_t, scene_span, plan=plan)
-                base = self._compose_progress_bar(base, t / max(0.001, duration), plan=plan)
-                frame = renderer.render(base, t, subtitle_entries)
-                Image.fromarray(frame).save(frame_dir / f"frame_{index:06d}.png")
-
+            frame_count = self._render_frames(
+                frame_dir=frame_dir,
+                topic=topic,
+                duration=duration,
+                size=size,
+                scenes=scenes,
+                use_motion_fallback=use_motion_fallback,
+                trend_items=trend_items,
+                plan=plan,
+                renderer=renderer,
+                subtitle_entries=subtitle_entries,
+            )
             temp_video = output_path.with_suffix(".temp.mp4")
             frame_pattern = str(frame_dir / "frame_%06d.png")
-            encode_cmd = [
-                "ffmpeg",
-                "-y",
-                "-framerate",
-                str(self.config.video_fps),
-                "-i",
-                frame_pattern,
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                str(temp_video),
-            ]
-            subprocess.run(encode_cmd, check=True, capture_output=True)
-
-            audio_inputs: list[str] = []
-            filter_parts: list[str] = []
-            maps: list[str] = []
-            if voice_path and voice_path.exists():
-                audio_inputs.extend(["-i", str(voice_path)])
-            if music_path and music_path.exists():
-                audio_inputs.extend(["-stream_loop", "-1", "-i", str(music_path)])
-            if voice_path and voice_path.exists() and music_path and music_path.exists():
-                filter_parts = [
-                    "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=1.0,aresample=44100[voice]",
-                    "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.18,aresample=44100[music]",
-                    "[music][voice]sidechaincompress=threshold=0.02:ratio=12:attack=20:release=250[ducked]",
-                    "[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-                ]
-                maps = ["-map", "0:v", "-map", "[aout]"]
-            elif voice_path and voice_path.exists():
-                maps = ["-map", "0:v", "-map", "1:a"]
-            elif music_path and music_path.exists():
-                maps = ["-map", "0:v", "-map", "1:a"]
-
-            if maps:
-                mux_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(temp_video),
-                    *audio_inputs,
-                ]
-                if filter_parts:
-                    mux_cmd.extend(["-filter_complex", ";".join(filter_parts)])
-                mux_cmd.extend(
-                    [
-                        *maps,
-                        "-c:v",
-                        "copy",
-                        "-c:a",
-                        "aac",
-                        "-shortest",
-                        str(output_path),
-                    ]
-                )
-                subprocess.run(mux_cmd, check=True, capture_output=True)
-            else:
-                temp_video.replace(output_path)
-
-            if temp_video.exists():
-                try:
-                    temp_video.unlink()
-                except Exception:
-                    pass
+            self._encode_temp_video(frame_pattern, temp_video)
+            self._write_output(temp_video, output_path, voice_path, music_path)
 
         return {
             "status": "ok",
